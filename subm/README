@@ -1,0 +1,5 @@
+CS3700
+Project 2
+Hsiu-Te Lin, Chieh Lee
+
+We approached the project by following the steps provided on course website. We used the python file provided as a starter. We first tried to send a simple “Hello” message from the bridge to the port. The we tried to enable the bridge to send from one port to another, and only focus on the data type messages (where there’s only one bridge). After that we started implementing spanning tree into our code, and start considering BPDUs. We got into troubles when we started to test intermediate level test cases where there will be new bridges added in the middle of the session, and we didn’t really know why our code did not work. 

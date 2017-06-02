@@ -1,0 +1,211 @@
+#!/usr/bin/python -u    
+# The -u makes output unbuffered, so it will show up immediately
+import sys
+import socket
+import select
+import json
+from sys import stdout
+import time
+import sys
+import threading
+from threading import Timer
+
+
+# pads the name with null bytes at the end
+def pad(name):
+        result = '\0' + name
+        while len(result) < 108:
+                result += '\0'
+        return result
+
+
+def broadcast_data(packet, source_socket):
+        for x in sockets:
+                if x != source_socket:
+                        x.send(data)
+
+def forwarding_data(packet, dest_socket):
+        dest_socket.send(packet)
+
+
+def broadcast_BPDU():
+        dumped_bpdu = json.dumps(bpdu)
+        for s in sockets:
+                s.send(dumped_bpdu)
+
+def broadcast_BPDU_prdcly():
+        t = Timer(0.75, broadcast_BPDU_prdcly)
+        t.start()
+        broadcast_BPDU()
+
+def timeout_ftable():
+        t = Timer(5, timeout_ftable)
+        t.start()
+        global ftable
+        current_time = time.time()
+        timeout_entries = []
+        for entry in ftable:
+                if current_time - ftable[entry]['age'] > 300:
+                        timeout_entries.append(entry)
+        for entry in timeout_entries:
+                del ftable[entry]
+
+def check_timeout_bridge():
+        t = Timer(0.75, check_timeout_bridge)
+        t.start()
+        global z
+        global sockets
+        global disable_ports
+        global zd
+        current_time = time.time()
+        for br in z:
+                if current_time - z[br] > 0.75:
+                        sockets = sockets + disable_ports
+                        disable_ports = []
+                        zd = z[br]
+
+# mutate global variable bpdu
+def STP(bpdu2, port):
+        global bpdu
+        global disable_ports
+        global sockets
+        global root_port
+
+        # boolean variable for the result of comparison of root and
+        # cost for bpdu1 and bpdu2. **for (only) keep the line short
+        root_1 = bpdu['message']['root']
+        root_2 = bpdu2['message']['root']
+        cost_1 = bpdu['message']['cost']
+        cost_2 = bpdu2['message']['cost']
+        bridge_id_1 = bpdu['message']['id']
+        bridge_id_2 = bpdu2['message']['id']
+        def change_bpdu():
+                global bpdu
+                global root_port
+                global ftable
+                root_port = port
+                root_id = bpdu2['message']['root']
+                cost = bpdu2['message']['cost'] + 1
+                bpdu = {"source":id, "dest":"ffff", "type": "bpdu", 
+                        "message":{"id":id, "root":root_id, "cost":cost}}
+                ftable = {}
+                broadcast_BPDU()
+        def remove_port():
+                global bpdu
+                global disable_ports
+                global sockets
+                global root_port
+                global ftable
+                if port != root_port:
+                        sockets.remove(port)                
+                        disable_ports.append(port)
+                        dp = []
+                        for x in disable_ports:
+                                dp.append(x.getpeername().split("#")[3][0]) 
+                        print "Disabled port:",bpdu['source'],'/',dp
+                        ftable = {}
+                broadcast_BPDU()
+        if root_2 < root_1:
+                change_bpdu()
+                print "New root:",bpdu['source'],'/',root_2
+                print "Root port:",bpdu['source'],'/',
+                print '\b', port.getpeername().split("#")[3][0]
+        elif root_2 == root_1 and cost_2 + 1 < cost_1:
+                change_bpdu()
+        elif root_2 == root_1 and cost_2 + 1 == cost_1 and \
+             port != root_port:
+                print 'hit'
+                remove_port()
+        elif root_2 == root_1 and \
+             cost_2 == cost_1 and \
+             bridge_id_2 < bridge_id_1:
+                remove_port()
+
+def zzz(bridge):
+        global z
+        bridge_name = bridge['source']
+        z[bridge_name] = time.time()
+
+if __name__ == "__main__":
+        id = sys.argv[1]
+        LAN = sys.argv[2:]
+        # take out duplicated LANs
+        LAN = list(set(LAN))
+        print "LAN: ", LAN
+        sockets = []
+        #forwarding table
+        ftable = {}
+        bpdu_bookmark = time.time()
+        ftable_bookmark = time.time()
+        zd = None
+        z = {}
+        
+        # creates sockets and connects to them
+        for x in range(len(LAN)):
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+                s.connect(pad(LAN[x]))
+                sockets.append(s)
+
+        
+        print "Bridge " + id + " starting up\n"
+
+
+        # bridge variables
+        root_port = None
+        designated_ports = []
+        disable_ports = []
+        # bpdu of this bridge (at initial state) (in json)
+        bpdu = {"source":id, "dest":"ffff", "type": "bpdu", 
+                "message":{"id":id, "root":id, "cost":0}}
+
+        timeout_ftable()
+        broadcast_BPDU_prdcly()
+        #check_timeout_bridge()
+ 
+        # Main loop
+        while True:
+                # Calls select with all the sockets; 
+                # change the timeout value (1)
+                ready, ignore, ignore2 = select.select(sockets, [], [], 1)
+                #zzo(current_time)
+                #if current_time - bpdu_bookmark > 0.75:
+                #        broadcast_BPDU()
+                #        bpdu_bookmark = time.time()
+                #if current_time - ftable_bookmark > 5:
+                #        timeout_ftable()
+                #        ftable_bookmark = time.time() 
+
+                
+                # Reads from each for the ready sockets
+                for x in ready:
+                        data = x.recv(1500)
+                        data_d = json.loads(data)
+                        if data_d['type'] == 'bpdu':
+                                #print "received BPDU"
+                                STP(data_d, x)
+                                zzz(data_d)
+                        else:
+                                msgid = data_d['message']['id']
+                                port_id = x.getpeername().split("#")[3][0]
+                                source = data_d['source']
+                                dest = data_d['dest']
+                                print "Received message", msgid, "on port", 
+                                print port_id, "from", source, "to" ,dest
+                                ftable[source] = {"port":x, "age":time.time()}
+                                if dest in ftable:
+                                        if ftable[source]['port'] == ftable[dest]['port']:
+                                                print "Not forwarding message", 
+                                                print msgid
+                                        else:                                        
+                                                #print "ftable[dest]: ", ftable[dest].getpeername().split("#")[3][0]
+                                                print "Forwarding message", 
+                                                print msgid, "to port", 
+                                                print ftable[dest]['port'].getpeername().split("#")[3][0]
+                                                forwarding_data(data, ftable[dest]['port'])
+                                else:
+                                        broadcast_data(data, x)
+                                        print "Broadcasting message", 
+                                        print msgid, "to all ports"
+                        #print(data)
+
+                
